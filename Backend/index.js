@@ -126,7 +126,6 @@ const nodemailer = require("nodemailer");
 // Send email route
 app.post("/api/messages/send-email", async (req, res) => {
   const { email, response } = req.body;
-
   try {
     const transporter = nodemailer.createTransport({
       service: "Gmail",
@@ -142,7 +141,6 @@ app.post("/api/messages/send-email", async (req, res) => {
       subject: "Response from Admin-Placement cell ",
       text: response,
     };
-
     await transporter.sendMail(mailOptions);
     res.status(200).json({ message: "Email sent successfully!" });
   } catch (error) {
