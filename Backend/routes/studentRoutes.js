@@ -1,7 +1,7 @@
 const express = require('express');
 const Student = require('../studentModel');
 const router = express.Router();
-
+const User = require("../models/User"); 
 // Create a new student
 router.post("/", async (req, res) => {
   try {
