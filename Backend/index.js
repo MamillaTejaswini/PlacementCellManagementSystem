@@ -13,7 +13,7 @@ app.use(express.json());
 app.use(cors());
 
 mongoose
-  .connect("mongodb+srv://mamillatejaswini345:123@cluster0.5c68l.mongodb.net/?retryWrites=true&w=majority")
+  .connect("your Mongo URI")
   .then(() => console.log("MongoDB connected"))
   .catch((err) => console.log("MongoDB connection error:", err));
 
