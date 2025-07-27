@@ -7,17 +7,26 @@ const MsgSchema = require("./models/Messages");
 const Job = require("./models/Jobs");
 const Experience = require("./models/InterviewExperience");
 
-
+const applicationRoutes = require("./routes/application");
+const slotRoutes = require("./routes/slot");
 const app = express();
-app.use(express.json());
-app.use(cors());
+//app.use(express.json());
+// app.use(cors());
+// ✅ 1. Allow CORS from localhost:3000 (React)
+app.use(cors({
+  origin: 'http://localhost:3000',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  credentials: true
+}));
+
+// ✅ 2. Increase payload size limit for JSON and form data (base64 resume is large!)
+app.use(express.json({ limit: '20mb' }));
+app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
 mongoose
   .connect("mongodb+srv://mamillatejaswini345:123@cluster0.5c68l.mongodb.net/?retryWrites=true&w=majority")
   .then(() => console.log("MongoDB connected"))
   .catch((err) => console.log("MongoDB connection error:", err));
-
-// User Registration
 app.post("/api/users/register", async (req, res) => {
   try {
     const { username, email, password, role } = req.body;
@@ -30,23 +39,17 @@ app.post("/api/users/register", async (req, res) => {
     if (existingUser) {
       return res.status(400).json({ message: "Username or Email already exists" });
     }
+   const newUser = new UserModel({ username, email, password, role: role || 'student' });
 
-    // Hash the password before saving
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Create and save the user
-    const newUser = new UserModel({ username, email, password: hashedPassword, role: role || 'student' });
     await newUser.save();
     res.status(201).json({ message: "User registered successfully" });
   } catch (error) {
     res.status(500).json({ message: "Internal server error", error });
   }
 });
-
-// User Login
 app.post("/api/users/login", async (req, res) => {
   try {
-    const { usernameOrEmail, password } = req.body;
+    const { usernameOrEmail, password, expectedRole } = req.body;
 
     // Check if the user exists (by username or email)
     const user = await UserModel.findOne({
@@ -55,6 +58,13 @@ app.post("/api/users/login", async (req, res) => {
 
     if (!user) {
       return res.status(404).json({ message: "User does not exist" });
+    }
+
+    // ✅ Restrict login by role
+    if (expectedRole && user.role !== expectedRole) {
+      return res.status(403).json({
+        message: `Access denied. Expected role: ${expectedRole}, but found: ${user.role}`,
+      });
     }
 
     // Compare hashed password
@@ -70,13 +80,14 @@ app.post("/api/users/login", async (req, res) => {
         id: user._id,
         username: user.username,
         email: user.email,
-        role: user.role, // Include the role in the response
+        role: user.role,
       },
     });
   } catch (error) {
-    res.status(500).json({ message: "Internal server error", error });
+    res.status(500).json({ message: "Internal server error", error: error.message });
   }
 });
+
  app.post("/api/messages/contact", async (req, res) => {
   try {
      const { name, email, subject } = req.body;
@@ -264,10 +275,10 @@ app.get('/api/experience/:id', async (req, res) => {
 
 app.put('/api/experience/:id', async (req, res) => {
   try {
-    const { studentName, companyName, jobRole,experience,email } = req.body;
+    const { studentName, companyName, jobRole,experience,email,difficulty,rounds,problems,mode,experienceLevel,status,jobPackage,date } = req.body;
     const exp = await Experience.findByIdAndUpdate(
       req.params.id,
-      { studentName, companyName, jobRole,experience,email},
+      { studentName, companyName, jobRole,experience,email,difficulty,rounds,problems,mode,experienceLevel,status,jobPackage,date},
       { new: true }
     );
     res.json(exp);
@@ -286,294 +297,77 @@ app.delete('/api/experience/:id', async (req, res) => {
     res.status(500).send('Server Error');
   }
 });
+
 app.post("/api/users/profile/store", async (req, res) => {
   try {
-    const { email, firstName, lastName, regNo, phone, dateOfBirth, currentSemester, branchOfStudy, skills, resume } = req.body;
+    console.log("📥 Incoming Profile Data:", req.body);
 
-    let user = await UserModel.findOne({ email });
+    const {
+      email, firstName, lastName, regNo, phone, dob,
+      semester, branch, sslc, diploma, backlogs, skills,
+      resume, location
+    } = req.body;
 
-    if (user) {
-      // Ensure `profile` exists inside user
-      if (!user.profile) {
-        user.profile = {};
-      }
-
-      // Update user.profile instead of user directly
-      user.profile.firstName = firstName;
-      user.profile.lastName = lastName;
-      user.profile.regNo = regNo;
-      user.profile.phone = phone;
-      user.profile.dateOfBirth = dateOfBirth;
-      user.profile.currentSemester = currentSemester;
-      user.profile.branchOfStudy = branchOfStudy;
-      user.profile.skills = skills;
-      user.profile.resume = resume;
-
-      await user.save();
-      return res.status(200).json({ message: "Profile updated successfully", user });
+    // Find the user
+    const user = await UserModel.findOne({ email });
+    if (!user) {
+      console.error("❌ User not found for email:", email);
+      return res.status(404).json({ message: "User not found" });
     }
 
-    // Create a new user with profile
-    user = new UserModel({
-      email,
-      profile: {
-        firstName,
-        lastName,
-        regNo,
-        phone,
-        dateOfBirth,
-        currentSemester,
-        branchOfStudy,
-        skills,
-        resume,
-      }
-    });
+    // Validations
+    const sanitizedPhone = /^\d{10}$/.test(phone) ? phone : "Not set";
+    const validBacklogs = /^\d+$/.test(backlogs) ? backlogs : "Not set";
+    const dateOfBirth = dob ? new Date(dob).toISOString().split('T')[0] : "Not set";
+    const processedSkills = Array.isArray(skills) ? skills : (skills ? [skills] : ["Not set"]);
+
+    // Set profile fields
+    user.profile = {
+      firstName: firstName || "Not set",
+      lastName: lastName || "Not set",
+      regNo: regNo || "Not set",
+      phone: sanitizedPhone,
+      dateOfBirth,
+      currentSemester: semester || "Not set",
+      branchOfStudy: branch || "Not set",
+      sslcAggregate: sslc || "Not set",
+      diplomaOr12thAggregate: diploma || "Not set",
+      historyOfBacklogs: validBacklogs,
+      skills: processedSkills,
+      resume: resume || "Not set",
+      location: location || "Not set"
+    };
 
     await user.save();
-    res.status(201).json({ message: "Profile saved successfully", user });
+    console.log("✅ Profile updated successfully for:", email);
+
+    res.status(200).json({
+      message: "Profile updated successfully",
+      user
+    });
+
+
   } catch (error) {
-    console.error(error); // Log error for debugging
-    res.status(500).json({ message: "Internal server error", error });
+    console.error("🔥 Error while updating profile:", error);
+    res.status(500).json({
+      message: "Internal server error",
+      error: error.message
+    });
   }
 });
 
-
-// Get User Profile by ID
-app.get("/api/users/profile/:id", async (req, res) => {
+app.get("/api/users/email/:email", async (req, res) => {
   try {
-    const user = await UserModel.findById(req.params.id);
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
+    const user = await UserModel.findOne({ email: req.params.email });
+    if (!user) return res.status(404).json({ message: "User not found" });
     res.status(200).json(user);
   } catch (error) {
+    console.error("Error saving profile:", error);
     res.status(500).json({ message: "Internal server error", error });
   }
 });
-
-// Update User Profile
-app.put("/api/users/profile/:id", async (req, res) => {
-  try {
-    const { username, email, role } = req.body;
-    const user = await UserModel.findByIdAndUpdate(
-      req.params.id,
-      { username, email, role },
-      { new: true }
-    );
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    res.status(200).json({ message: "Profile updated successfully", user });
-  } catch (error) {
-    res.status(500).json({ message: "Internal server error", error });
-  }
-});
-
-// Delete User Profile
-app.delete("/api/users/profile/:id", async (req, res) => {
-  try {
-    const user = await UserModel.findByIdAndDelete(req.params.id);
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-    res.status(200).json({ message: "User profile deleted successfully" });
-  } catch (error) {
-    res.status(500).json({ message: "Internal server error", error });
-  }
-});
-
-// app.put("/api/users/profile", async (req, res) => {
-//   try {
-//     const {firstName, lastName, regNo, phone, email, dateOfBirth, currentSemester, branchOfStudy, sslcAggregate, diplomaOr12thAggregate, historyOfBacklogs, skills, resume} = req.body;
-
-//     // Find user by email and update profile
-//     const updatedUser = await UserModel.findOneAndUpdate(
-//       { email },
-//       {
-//       $set: { 
-//         "profile.firstName": firstName,
-// "profile.lastName": lastName,
-// "profile.regNo": regNo,
-// "profile.phone": phone,
-// "profile.email": email,
-// "profile.dateOfBirth": dateOfBirth,
-// "profile.currentSemester": currentSemester,
-// "profile.branchOfStudy": branchOfStudy,
-// "profile.sslcAggregate": sslcAggregate,
-// "profile.diplomaOr12thAggregate": diplomaOr12thAggregate,
-// "profile.historyOfBacklogs": historyOfBacklogs,
-// "profile.skills": skills,
-// "profile.resume": resume
-
-//       }
-//     },
-//       { new: true }
-//     );
-
-//     if (!updatedUser) {
-//       return res.status(404).json({ message: "User not found" });
-//     }
-
-//     res.status(200).json({ message: "Profile updated successfully", profile: updatedUser.profile });
-//   } catch (error) {
-//     res.status(500).json({ message: "Internal server error", error });
-//   }
-// });
-// app.put("/api/users/profile/update", async (req, res) => {
-//   const { firstName, lastName, regNo, phone, email, dateOfBirth, currentSemester, branchOfStudy, sslcAggregate, diplomaOr12thAggregate, historyOfBacklogs, skills, resume
-//   } = req.body;
-//   try {
-//     const updatedUser = await UserModel.findOneAndUpdate(
-//       { email },
-//       { firstName, lastName, regNo, phone, email, dateOfBirth, currentSemester, branchOfStudy, sslcAggregate, diplomaOr12thAggregate, historyOfBacklogs, skills, resume
-//       },
-//       { new: true }
-//     );
-//     res.status(200).json(updatedUser);
-//   } catch (error) {
-//     res.status(500).json({ message: "Internal server error", error });
-//   }
-// });
-
-// app.get("/api/users/profile/:email", async (req, res) => {
-//   try {
-//     const { email } = req.params;
-
-//     const user = await UserModel.findOne({ email }, "profile");
-//     if (!user) {
-//       return res.status(404).json({ message: "User not found" });
-//     }
-
-//     res.status(200).json(user.profile);
-//   } catch (error) {
-//     res.status(500).json({ message: "Internal server error", error });
-//   }
-// });
-// // app.post("/api/users/profile/store", async (req, res) => {
-// //   try {
-// //     console.log("Received Data:", req.body); // Log request data
-// //     const { email } = req.body;
-
-// //     if (!email) {
-// //       return res.status(400).json({ message: "Email is required" });
-// //     }
-
-// //     let user = await UserModel.findOne({ email });
-
-// //     if (user) {
-// //       // Use findOneAndUpdate for atomic update
-// //       user = await UserModel.findOneAndUpdate(
-// //         { email },
-// //         { $set: req.body },
-// //         { new: true, runValidators: true }
-// //       );
-// //       return res.json({ message: "Profile updated successfully", user });
-// //     } else {
-// //       const newUser = new UserModel(req.body);
-// //       await newUser.save();
-// //       return res.json({ message: "Profile created successfully", newUser });
-// //     }
-// //   } catch (error) {
-// //     console.error("Error saving profile:", error);
-// //     res.status(500).json({ message: "Server error", error: error.message });
-// //   }
-// // });
-
-// // app.post("/api/users/profile/store", async (req, res) => {
-// //   try {
-// //     console.log("Received Data:", req.body); // Log request data
-// //     const { email, firstName, lastName, usn, phone, dob, semester, branch, sslc, diploma, backlogs, resume, skills } = req.body;
-// //     if (!email) {
-// //       return res.status(400).json({ message: "Email is required" });
-// //     }
-
-// //     let user = await UserModel.findOne({ email });
-
-// //     if (user) {
-// //       user.set(req.body);
-// //       await user.save();
-// //       return res.json({ message: "Profile updated successfully", user });
-// //     } else {
-// //       const newUser = new User(req.body);
-// //       await newUser.save();
-// //       return res.json({ message: "Profile created successfully", newUser });
-// //     }
-// //   } catch (error) {
-// //     console.error("Error saving profile:", error);
-// //     res.status(500).json({ message: "Server error", error: error.message });
-// //   }
-// // });
-// // app.post("/api/users/profile/store", async (req, res) => {
-// //   try {
-// //     console.log("Received Data:", req.body);
-
-// //     const { email, firstName, lastName, regNo, phone, dateOfBirth, currentSemester, 
-// //             branchOfStudy, sslcAggregate, diplomaOr12thAggregate, historyOfBacklogs, 
-// //             skills, resume } = req.body;
-
-// //     if (!email) {
-// //       return res.status(400).json({ message: "Email is required" });
-// //     }
-
-// //     let user = await UserModel.findOne({ email });
-
-// //     if (user) {
-// //       user.profile.set({
-// //         firstName, lastName, regNo, phone, dateOfBirth, currentSemester, 
-// //         branchOfStudy, sslcAggregate, diplomaOr12thAggregate, historyOfBacklogs, 
-// //         skills, resume
-// //       });
-// //       await user.profile.save();
-// //       return res.json({ message: "Profile updated successfully", user });
-// //     } else {
-// //       return res.status(404).json({ message: "User not found" });
-// //     }
-// //   } catch (error) {
-// //     console.error("Error saving profile:", error);
-// //     res.status(500).json({ message: "Server error", error: error.message });
-// //   }
-// // });
-
-// app.post("/api/users/profile/store", async (req, res) => {
-//   try {
-//     console.log("Received Data:", req.body);
-
-//     const { email, firstName, lastName, regNo, phone, dateOfBirth, currentSemester, 
-//             branchOfStudy, sslcAggregate, diplomaOr12thAggregate, historyOfBacklogs, 
-//             skills, resume } = req.body;
-
-//     if (!email) {
-//       return res.status(400).json({ message: "Email is required" });
-//     }
-
-//     let user = await UserModel.findOne({ email });
-
-//     if (user) {
-//       if (!user.profile) {
-//         user.profile = {}; // Initialize profile if it doesn't exist
-//       }
-      
-//       user.profile.set({
-//         firstName, lastName, regNo, phone, dateOfBirth, currentSemester, 
-//         branchOfStudy, sslcAggregate, diplomaOr12thAggregate, historyOfBacklogs, 
-//         skills, resume
-//       });
-
-//       await user.save();  // ✅ Save the entire user document
-
-//       return res.json({ message: "Profile updated successfully", user });
-//     } else {
-//       return res.status(404).json({ message: "User not found" });
-//     }
-//   } catch (error) {
-//     console.error("Error saving profile:", error);
-//     res.status(500).json({ message: "Server error", error: error.message });
-//   }
-// });
-
-
+app.use('/api/slots', slotRoutes);
+app.use("/api/applications", applicationRoutes);
 
 app.listen(5000, () => {
   console.log("Server is running on port 5000");
